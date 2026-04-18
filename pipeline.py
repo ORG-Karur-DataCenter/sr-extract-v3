@@ -78,18 +78,15 @@ async def aggregator_loop(store: JobStore, writer: IncrementalWriter, stop_event
         completed = store.get_completed_studies()
         for study in completed:
             study_id = study["study_id"]
-            chunks = store.get_study_chunks(study_id)
-            chunk_results = []
-            for c in chunks:
-                if c["result_json"]:
-                    import json
-                    chunk_results.append(json.loads(c["result_json"]))
-            if not chunk_results:
+            agg = aggregate_study(store, study_id, writer.fields)
+            if agg is None:
                 continue
-            final = aggregate_study(chunk_results, writer.fields)
-            writer.write_row(study_id, final)
-            store.mark_study_written(study_id, final)
-            log.info(f"[green]Wrote study[/green] {study_id} ({sum(1 for v in final.values() if v)} fields)")
+            record = agg.record
+            writer.write_row(study_id, record)
+            store.mark_study_written(study_id, record)
+            log.info(f"[green]Wrote study[/green] {study_id} "
+                     f"({sum(1 for v in record.values() if v)} fields, "
+                     f"{len(agg.conflicts)} conflicts)")
         await asyncio.sleep(2)
 
 
@@ -102,7 +99,7 @@ async def run_pipeline(resume: bool = False, ingest_only: bool = False):
     if not resume:
         console.print("[cyan]Ingesting PDFs + template...[/cyan]")
         result = ingest.ingest_all(store)
-        console.print(f"  {result['pdfs']} PDFs → {result['chunks_new']} new chunks "
+        console.print(f"  {result['pdfs']} PDFs -> {result['chunks_new']} new chunks "
                       f"({result['chunks_skipped']} already in queue)")
         console.print(f"  Template: {result['template_fields']} fields")
         if ingest_only:
@@ -149,7 +146,13 @@ async def run_pipeline(resume: bool = False, ingest_only: bool = False):
         await worker_task
 
         # Final sweep for any remaining completed studies
-        await aggregator_loop(store, writer, stop_event=asyncio.Event())  # one pass
+        completed = store.get_completed_studies()
+        for study in completed:
+            study_id = study["study_id"]
+            agg = aggregate_study(store, study_id, writer.fields)
+            if agg:
+                writer.write_row(study_id, agg.record)
+                store.mark_study_written(study_id, agg.record)
 
     writer.close()
     console.print("\n[bold green]Pipeline complete.[/bold green]")

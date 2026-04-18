@@ -14,7 +14,8 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 from config.settings import (
     GEMINI_MODEL, CLAUDE_MODEL, CLAUDE_API_KEY, USE_CLAUDE_FALLBACK,
@@ -67,7 +68,6 @@ def build_prompt(chunk_text: str, fields: list[str], section_name: Optional[str]
     fields_json = json.dumps(fields, indent=2)
     section_hint = f"\nSection: {section_name}" if section_name else ""
     return (
-        f"{_SYSTEM_PROMPT}\n\n"
         f"Fields to extract:\n{fields_json}\n"
         f"{section_hint}\n\n"
         f"=== CHUNK TEXT ===\n{chunk_text}\n=== END CHUNK ===\n\n"
@@ -97,7 +97,7 @@ def parse_json_response(text: str) -> dict:
         raise PermanentAPIError(f"Could not parse JSON from response: {text[:200]}")
 
 
-# ── Gemini client ────────────────────────────────────────────────────
+# ── Gemini client (google.genai SDK) ─────────────────────────────────
 async def call_gemini(api_key: str, prompt: str) -> tuple[str, int, int]:
     """Invoke Gemini. Returns (text, tokens_in, tokens_out).
 
@@ -105,18 +105,21 @@ async def call_gemini(api_key: str, prompt: str) -> tuple[str, int, int]:
     PermanentAPIError on 4xx.
     """
     def _sync():
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(GEMINI_MODEL)
+        client = genai.Client(api_key=api_key)
         try:
-            resp = model.generate_content(
-                prompt,
-                generation_config={
-                    "temperature": 0.0,
-                    "response_mime_type": "application/json",
-                },
+            resp = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=_SYSTEM_PROMPT,
+                    temperature=0.0,
+                    response_mime_type="application/json",
+                ),
             )
         except Exception as e:
             msg = str(e).lower()
+            if "404" in msg or "not found" in msg:
+                raise PermanentAPIError(f"Model not found: {e}")
             if "429" in msg or "quota" in msg or "rate" in msg:
                 raise RateLimitError(retry_after=60, message=str(e))
             if "503" in msg or "overload" in msg or "unavailable" in msg:

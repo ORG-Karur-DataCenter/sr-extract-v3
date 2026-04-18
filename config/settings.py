@@ -22,7 +22,8 @@ for d in (DATA_DIR, PDF_DIR, TEMPLATE_DIR, OUTPUT_DIR):
 
 # ── API keys (comma-separated in .env: GEMINI_API_KEYS=key1,key2,...) ──
 GEMINI_API_KEYS = [
-    k.strip() for k in os.getenv("GEMINI_API_KEYS", "").split(",") if k.strip()
+    k.strip() for k in os.getenv("GEMINI_API_KEYS", "").split(",")
+    if k.strip() and len(k.strip()) > 10  # filter out placeholder keys like 'key2'
 ]
 CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY", "").strip()
 
@@ -65,7 +66,7 @@ SKIP_SECTIONS = [
 ]
 
 # ── Models ───────────────────────────────────────────────────────────
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5")
 USE_CLAUDE_FALLBACK = bool(CLAUDE_API_KEY)
 

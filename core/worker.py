@@ -40,39 +40,26 @@ class Worker:
         self._stop = False
 
     async def run(self):
-        """Main dispatch loop. Exits when no pending jobs remain."""
-        tasks: set[asyncio.Task] = set()
+        """Main dispatch loop. Exits when no pending jobs remain.
+        
+        Processes one job at a time to stay within free-tier rate limits.
+        """
         while not self._stop:
-            pending = self.store.get_pending(limit=MAX_CONCURRENT_WORKERS * 2)
-            if not pending and not tasks:
+            pending = self.store.get_pending(limit=1)
+            if not pending:
                 log.info("No pending jobs, exiting loop")
                 break
-            if not pending:
-                # Tasks in flight but queue empty — wait on them
-                done, tasks = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-                continue
 
-            for row in pending:
-                if self._stop:
-                    break
-                job_id = row["id"]
-                if not self.store.claim_job(job_id):
-                    continue  # someone else got it
-                task = asyncio.create_task(self._process(dict(row)))
-                tasks.add(task)
-                task.add_done_callback(tasks.discard)
+            row = pending[0]
+            job_id = row["id"]
+            if not self.store.claim_job(job_id):
+                continue  # someone else got it
 
-            # Yield to let tasks run; avoid tight loop
-            if tasks:
-                done, pending_tasks = await asyncio.wait(
-                    tasks, timeout=1.0, return_when=asyncio.FIRST_COMPLETED
-                )
-            else:
-                await asyncio.sleep(0.5)
+            await self._process(dict(row))
 
-        # Drain remaining tasks
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            # Pause between API calls to respect rate limits
+            if not self._stop:
+                await asyncio.sleep(5)
 
     def stop(self):
         self._stop = True

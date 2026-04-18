@@ -44,9 +44,10 @@ def _serialize(value: Any) -> str:
 class IncrementalWriter:
     """Append-on-completion writer. One row per study."""
 
-    def __init__(self, output_dir: Path = OUTPUT_DIR,
+    def __init__(self, fields: list[str], output_dir: Path = OUTPUT_DIR,
                  basename: str = "extracted",
                  fmt: str = OUTPUT_FORMAT):
+        self.fields = fields
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.basename = basename
@@ -54,6 +55,13 @@ class IncrementalWriter:
         self.xlsx_path = self.output_dir / f"{basename}.xlsx"
         self.csv_path = self.output_dir / f"{basename}.csv"
         self._headers: list[str] | None = None
+
+    @property
+    def output_path(self) -> Path:
+        """Return the primary output file path."""
+        if self.fmt in ("xlsx", "both"):
+            return self.xlsx_path
+        return self.csv_path
 
     def _init_files(self, headers: list[str]):
         """Create files with headers if they don't exist."""
@@ -71,6 +79,10 @@ class IncrementalWriter:
             with self.csv_path.open("w", newline="", encoding="utf-8") as f:
                 csv.writer(f).writerow(headers)
             log.info(f"Created {self.csv_path}")
+
+    def write_row(self, study_id: str, record: dict[str, Any]) -> None:
+        """Write a single study row. Alias for append_record with auto-fields."""
+        self.append_record(record, self.fields)
 
     def append_record(self, record: dict[str, Any],
                       template_fields: list[str]) -> None:
@@ -92,6 +104,10 @@ class IncrementalWriter:
                     csv.writer(f).writerow(row)
 
             log.info(f"Wrote study {record.get('_study_id', '?')} -> {self.xlsx_path.name}")
+
+    def close(self):
+        """Finalize the writer. Currently a no-op since we save after each row."""
+        log.info(f"Writer closed. Output at {self.output_path}")
 
     def written_study_ids(self) -> set[str]:
         """Return study_ids already in the output file (to avoid duplicates)."""
