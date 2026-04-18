@@ -72,24 +72,20 @@ def build_status_table(store: JobStore, keys: KeyManager) -> Table:
     return tbl
 
 
-async def aggregator_loop(store: JobStore, writer: IncrementalWriter, stop_event: asyncio.Event):
+async def aggregator_loop(store: JobStore, writer: IncrementalWriter,
+                          fields: list[str], stop_event: asyncio.Event):
     """Polls for completed studies and writes rows as they finish."""
     while not stop_event.is_set():
         completed = store.get_completed_studies()
         for study in completed:
             study_id = study["study_id"]
-            chunks = store.get_study_chunks(study_id)
-            chunk_results = []
-            for c in chunks:
-                if c["result_json"]:
-                    import json
-                    chunk_results.append(json.loads(c["result_json"]))
-            if not chunk_results:
+            agg = aggregate_study(store, study_id, fields)
+            if agg is None:
                 continue
-            final = aggregate_study(chunk_results, writer.fields)
-            writer.write_row(study_id, final)
-            store.mark_study_written(study_id, final)
-            log.info(f"[green]Wrote study[/green] {study_id} ({sum(1 for v in final.values() if v)} fields)")
+            writer.append_record(agg.record, fields)
+            store.mark_study_written(study_id, agg.record)
+            log.info(f"[green]Wrote study[/green] {study_id} "
+                     f"({sum(1 for v in agg.record.values() if v)} fields)")
         await asyncio.sleep(2)
 
 
@@ -112,7 +108,7 @@ async def run_pipeline(resume: bool = False, ingest_only: bool = False):
     fields = schema["fields"]
 
     keys = KeyManager(GEMINI_API_KEYS)
-    writer = IncrementalWriter(fields, OUTPUT_DIR, fmt=OUTPUT_FORMAT)
+    writer = IncrementalWriter(OUTPUT_DIR, fmt=OUTPUT_FORMAT)
 
     worker = Worker(store, keys, expected_fields=fields)
     stop = asyncio.Event()
@@ -131,7 +127,7 @@ async def run_pipeline(resume: bool = False, ingest_only: bool = False):
 
     # Kick off worker + aggregator in parallel
     worker_task = asyncio.create_task(worker.run())
-    aggregator_task = asyncio.create_task(aggregator_loop(store, writer, stop))
+    aggregator_task = asyncio.create_task(aggregator_loop(store, writer, fields, stop))
 
     # Live status
     try:
@@ -149,14 +145,21 @@ async def run_pipeline(resume: bool = False, ingest_only: bool = False):
         await worker_task
 
         # Final sweep for any remaining completed studies
-        await aggregator_loop(store, writer, stop_event=asyncio.Event())  # one pass
+        completed = store.get_completed_studies()
+        for study in completed:
+            study_id = study["study_id"]
+            agg = aggregate_study(store, study_id, fields)
+            if agg is None:
+                continue
+            writer.append_record(agg.record, fields)
+            store.mark_study_written(study_id, agg.record)
 
-    writer.close()
     console.print("\n[bold green]Pipeline complete.[/bold green]")
     final = store.stats()
     console.print(f"  Done: {final.get('done', 0)} chunks")
     console.print(f"  Failed: {final.get('failed', 0)} chunks")
-    console.print(f"  Output: {writer.output_path}")
+    output_path = writer.xlsx_path if writer.fmt in ("xlsx", "both") else writer.csv_path
+    console.print(f"  Output: {output_path}")
 
 
 def main():
