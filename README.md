@@ -1,80 +1,179 @@
-# sr-extract-v3 — Systematic Review Extraction Agent V3
+# sr-extract-v3
 
-A production-grade, token-aware, crash-safe PDF extraction pipeline for systematic reviews.
+**Systematic Review Extraction Agent — V3**
 
-## Features
-- Smart PDF section-based chunking (PyMuPDF)
-- SQLite job queue with full state persistence (resume on crash)
-- Token-aware API key rotation with 85% RPM/TPM threshold guard
-- Async worker pool with semaphore-controlled concurrency (max 4)
-- Jittered exponential backoff — no retry storms
-- Incremental Excel + CSV output (written on each completion)
-- Dynamic extraction template support (fully configurable per review)
-- Gemini 1.5 Flash primary · Claude Haiku fallback slot ready
+Token-aware, queue-based, crash-safe PDF extraction pipeline for systematic reviews. Built to survive API rate limits and model overload without burning through keys.
+
+---
+
+## Why V3 exists
+
+V1 (web app) and V2 (CLI agent) both failed at scale: 10 API keys exhausted in 2 runs, retry storms, lost progress on crashes. V3 fixes the root causes:
+
+- **Section-based chunking** instead of full-PDF-per-call → ~70% fewer tokens
+- **Semaphore-bounded async workers** instead of naive `asyncio.gather()` → no 429 cascades
+- **SQLite job state** → restarts skip completed work, zero re-extraction
+- **Token-aware key rotation** with 85% safety threshold → never hits the rate wall
+- **Jittered exponential backoff** → no retry storms
+- **Incremental Excel writes** → every completed study is on disk immediately
+
+---
+
+## Architecture
+
+```
+PDFs + Excel template
+        ↓
+   Smart chunker  (PyMuPDF + section detection + table extraction)
+        ↓
+   SQLite queue   (pending → in_progress → done / failed)
+        ↓
+Token-aware key manager  (RPM/TPM tracking, 85% threshold)
+        ↓
+  Worker pool  (Semaphore(4), async dispatch)
+        ↓
+ Gemini Flash  ──(on 429/503, retry ≥3x)──→  Claude Haiku (optional)
+        ↓
+    Validator  (schema check against template)
+        ↓
+  Result cache  (SQLite; skip on restart)
+        ↓
+   Aggregator  (merge chunks → study record)
+        ↓
+  Excel writer  (incremental, crash-safe)
+```
+
+---
 
 ## Setup
 
+**Requirements:** Python 3.10+
+
 ```bash
-git clone https://github.com/ORG-Karur-DataCenter/sr-extract-v3
+git clone https://github.com/ORG-Karur-DataCenter/sr-extract-v3.git
 cd sr-extract-v3
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+python -m venv .venv && source .venv/bin/activate  # or .venv\Scripts\activate on Windows
 pip install -r requirements.txt
-cp config/keys.env.example config/keys.env
-# Edit config/keys.env with your API keys
 ```
+
+**Configure keys:**
+
+```bash
+cp .env.example .env
+# edit .env, add your GEMINI_API_KEYS (comma-separated)
+# get keys at: https://aistudio.google.com/app/apikey
+```
+
+**Drop your inputs:**
+
+```
+data/
+├── pdfs/                 # your PDFs here
+└── templates/
+    └── extraction.xlsx   # your template: first row = field names
+```
+
+---
 
 ## Usage
 
 ```bash
-# 1. Place PDFs in data/pdfs/
-# 2. Place your Excel template in data/templates/
-# 3. Run ingestion
-python ingest.py --pdfs data/pdfs/ --template data/templates/template.xlsx
-
-# 4. Run extraction pipeline
+# Full run: ingest + extract + write
 python pipeline.py
 
-# 5. Find output in data/output/
+# Just ingest (chunk PDFs into queue)
+python pipeline.py --ingest-only
+
+# Resume after a crash (skip ingest, process pending)
+python pipeline.py --resume
+
+# Check queue status
+python pipeline.py --status
 ```
 
-## Project Structure
+Output lands in `data/outputs/extraction_results.xlsx` — one row per study, columns match your template.
+
+---
+
+## Configuration
+
+All tunables in `config/settings.py`:
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `MAX_CONCURRENT_WORKERS` | 4 | Parallel API calls (keep ≤ number of keys) |
+| `SAFETY_THRESHOLD` | 0.85 | Use only 85% of stated rate limits |
+| `MAX_CHUNK_TOKENS` | 6000 | Per-request chunk size |
+| `MAX_RETRIES` | 5 | Retry cap before permanent fail |
+| `RETRY_MAX_DELAY` | 120s | Backoff cap |
+
+Override any of these via environment variable.
+
+---
+
+## Running tests
+
+```bash
+pip install pytest pytest-asyncio
+pytest tests/ -v
+```
+
+Covers:
+- Key manager: rate limiting, threshold, rotation, backoff
+- Validator: schema matching, normalization
+- Chunker: token estimation, splitting
+- Job store: atomic claims, state transitions, study completion
+
+---
+
+## How it handles failure
+
+**Rate limit (429):** Key is marked blocked for `retry_after` seconds. Job requeued with jittered backoff. Other keys keep working.
+
+**Model overload (503):** Job requeued with exponential backoff. After 3 retries, if `CLAUDE_API_KEY` is set, falls back to Claude Haiku for that chunk.
+
+**Crash / power loss:** SQLite WAL mode persists everything. Restart with `--resume` and the pipeline picks up exactly where it left off — zero re-extraction.
+
+**Bad JSON from model:** Caught at parse time, marked permanent failure. Study still completes if other chunks succeed; missing fields remain null in output.
+
+---
+
+## Scaling notes
+
+For 1000+ PDFs:
+- Free Gemini tier (15 RPM per key): expect ~50 PDFs/day/key
+- With 10 keys + Claude Haiku fallback: ~1 day for 1000 PDFs
+- WAL-mode SQLite handles 100k+ rows without issue
+
+For multi-machine scaling, swap `core/job_store.py` for a Redis-backed queue (same interface). Not currently needed.
+
+---
+
+## Project layout
 
 ```
 sr-extract-v3/
+├── config/settings.py       # all tunables
 ├── core/
-│   ├── chunker.py        # Smart PDF section chunker
-│   ├── job_store.py      # SQLite state machine
-│   ├── key_manager.py    # Token-aware API key rotator
-│   ├── worker.py         # Async worker pool
-│   ├── extractor.py      # Gemini API client + fallback slot
-│   ├── validator.py      # Schema validator
-│   └── aggregator.py     # Chunk merger
-├── output/
-│   └── writer.py         # Incremental Excel/CSV writer
-├── config/
-│   ├── settings.py       # All tunable constants
-│   └── keys.env.example  # API key template
-├── data/
-│   ├── pdfs/             # Input PDFs
-│   ├── templates/        # Excel extraction templates
-│   └── output/           # Results
-├── tests/
-│   ├── test_chunker.py
-│   ├── test_key_manager.py
-│   └── test_extractor.py
-├── ingest.py             # Ingestion entrypoint
-├── pipeline.py           # Main orchestration loop
-└── requirements.txt
+│   ├── chunker.py           # PDF → chunks
+│   ├── job_store.py         # SQLite state machine
+│   ├── key_manager.py       # token-aware key rotator
+│   ├── extractor.py         # Gemini + Claude clients
+│   ├── validator.py         # schema check
+│   ├── worker.py            # async worker pool
+│   └── aggregator.py        # chunks → study record
+├── output/writer.py         # incremental Excel writer
+├── ingest.py                # PDF + template loader
+├── pipeline.py              # orchestrator (main entry)
+├── tests/                   # unit tests
+└── data/
+    ├── pdfs/                # your inputs
+    ├── templates/           # your template .xlsx
+    └── outputs/             # extraction results
 ```
 
-## Architecture
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system design.
-
-## Resumability
-
-The pipeline is fully crash-safe. On restart, it skips all completed jobs and resumes from where it stopped. No re-extraction of already-processed studies.
+---
 
 ## License
+
 MIT
