@@ -37,7 +37,8 @@ def _classify_error(exc: BaseException) -> str:
         return "quota_exhausted"
     if isinstance(exc, PermanentAPIError):
         return "invalid_key"
-    return f"pipeline_error:{type(exc).__name__}"
+    log.debug("Unclassified pipeline error type: %s", type(exc).__name__)
+    return "pipeline_error"
 
 
 async def run_pipeline_for_job(ctx: JobContext) -> None:
@@ -77,7 +78,7 @@ async def run_pipeline_for_job(ctx: JobContext) -> None:
         ctx.chunks_total = stats.get("pending", 0)
         # Studies = distinct PDF stems; count them from the DB directly
         # (ingest registers one study per PDF)
-        ctx.studies_total = len(store.get_completed_studies()) + stats.get("pending", 0)
+        ctx.studies_total = store.study_count()
         ctx.touch()
 
         # ── 4. Build KeyManager and Worker ───────────────────────────
@@ -143,7 +144,6 @@ async def run_pipeline_for_job(ctx: JobContext) -> None:
         )
 
         # ── 8. Finalise ──────────────────────────────────────────────
-        writer.close()
         ctx.result_path = writer.output_path
         ctx.status = "done"
         ctx.touch()
@@ -174,3 +174,5 @@ async def run_pipeline_for_job(ctx: JobContext) -> None:
         ctx.api_keys = []
         if store is not None:
             store.close()
+        if writer is not None:
+            writer.close()
