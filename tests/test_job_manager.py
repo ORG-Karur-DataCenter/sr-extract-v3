@@ -1,5 +1,6 @@
 """Tests for JobManager: isolation, cancellation, cleanup, concurrency."""
 import asyncio
+import time
 import pytest
 from pathlib import Path
 
@@ -65,3 +66,32 @@ def test_startup_wipes_existing_jobs_dir(tmp_path):
     _ = JobManager(jobs_root=jobs)
     assert not orphan.exists()
     assert jobs.is_dir()
+
+
+def test_cleanup_removes_idle_jobs(manager, monkeypatch):
+    monkeypatch.setenv("JOB_IDLE_TIMEOUT_SECONDS", "0")
+    ctx = manager.create_job(api_keys=["k"], model="gemini-2.0-flash",
+                             output_format="xlsx")
+    ctx.status = "done"
+    ctx.updated_at = time.time() - 3600
+    manager.cleanup_once()
+    with pytest.raises(JobNotFoundError):
+        manager.get(ctx.job_id)
+
+
+def test_cleanup_keeps_fresh_jobs(manager):
+    ctx = manager.create_job(api_keys=["k"], model="gemini-2.0-flash",
+                             output_format="xlsx")
+    manager.cleanup_once()
+    assert manager.get(ctx.job_id) is ctx
+
+
+def test_cleanup_removes_failed_jobs_after_grace(manager, monkeypatch):
+    monkeypatch.setenv("JOB_FAILED_GRACE_SECONDS", "0")
+    ctx = manager.create_job(api_keys=["k"], model="gemini-2.0-flash",
+                             output_format="xlsx")
+    ctx.status = "failed"
+    ctx.updated_at = time.time() - 10
+    manager.cleanup_once()
+    with pytest.raises(JobNotFoundError):
+        manager.get(ctx.job_id)

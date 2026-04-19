@@ -78,3 +78,37 @@ class JobManager:
 
     def all_jobs(self) -> list[JobContext]:
         return list(self._jobs.values())
+
+    def cleanup_once(self) -> int:
+        """Dispose jobs that have outlived their timeouts. Returns count removed."""
+        import time as _time
+        idle_timeout = int(os.getenv("JOB_IDLE_TIMEOUT_SECONDS", "3600"))
+        failed_grace = int(os.getenv("JOB_FAILED_GRACE_SECONDS", "300"))
+        now = _time.time()
+        removed = 0
+        for ctx in list(self._jobs.values()):
+            idle = now - ctx.updated_at
+            should_remove = (
+                (ctx.status in ("done", "cancelled") and idle >= failed_grace)
+                or (ctx.status == "failed" and idle >= failed_grace)
+                or (idle >= idle_timeout)
+            )
+            if should_remove:
+                try:
+                    self.dispose(ctx.job_id)
+                    removed += 1
+                except JobNotFoundError:
+                    pass
+        return removed
+
+    async def cleanup_loop(self, interval_seconds: int = 600) -> None:
+        """Background async task — runs cleanup every interval."""
+        import asyncio as _asyncio
+        while True:
+            try:
+                removed = self.cleanup_once()
+                if removed:
+                    log.info("Cleanup removed %d stale jobs", removed)
+            except Exception:
+                log.exception("Cleanup loop iteration failed")
+            await _asyncio.sleep(interval_seconds)
