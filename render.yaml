@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: sr-extract-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true
+    healthCheckPath: /health
+    envVars:
+      - key: LOG_LEVEL
+        value: INFO
+      - key: MAX_CONCURRENT_JOBS
+        value: "3"
+      - key: JOB_TIMEOUT_SECONDS
+        value: "1800"
+      - key: JOB_IDLE_TIMEOUT_SECONDS
+        value: "3600"
+      - key: JOB_FAILED_GRACE_SECONDS
+        value: "300"
+      - key: MAX_UPLOAD_BYTES
+        value: "52428800"
+      - key: RATE_LIMIT
+        value: "10/hour"
+      - key: CORS_ALLOWED_ORIGINS
+        value: "https://org-karur-datacenter.github.io"
