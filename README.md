@@ -174,6 +174,61 @@ sr-extract-v3/
 
 ---
 
+---
+
+## Hosted API
+
+A hosted FastAPI wrapper ships alongside the pipeline, deployable to [Render](https://render.com) free tier.
+
+**Base URL:** `https://sr-extract-api.onrender.com`
+
+### Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Service health — `{status, active_jobs, uptime_seconds}` |
+| `POST` | `/jobs` | Submit PDFs + template + API keys → `{job_id, accepted_at}` |
+| `GET` | `/jobs/{id}/status` | Poll extraction progress → `{status, progress, …}` |
+| `GET` | `/jobs/{id}/result` | Download Excel/CSV result (streams file, wipes sandbox) |
+| `DELETE` | `/jobs/{id}` | Cancel and clean up a job |
+
+### Request format (`POST /jobs`)
+
+`multipart/form-data` fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `api_keys` | string | Comma-separated Gemini API keys (never stored) |
+| `model` | string | One of `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.0-flash`, `gemini-2.0-flash-lite` |
+| `output_format` | string | `xlsx` (default) or `csv` |
+| `pdfs` | file(s) | One or more PDF files (max 20, 10 MB each) |
+| `template` | file | Excel template with column headers = field names |
+
+### Running tests
+
+```bash
+pytest tests/ -v          # 66 tests, zero real API calls
+```
+
+### Self-hosting
+
+```bash
+# Local
+uvicorn server:app --host 0.0.0.0 --port 8000
+
+# Docker
+docker build -t sr-extract-v3 .
+docker run -p 8000:8000 sr-extract-v3
+
+# Render — connect repo, Render auto-detects render.yaml
+```
+
+### Spec
+
+Full design document: `docs/superpowers/specs/2026-04-19-backend-frontend-integration-design.md`
+
+---
+
 ## License
 
 MIT
