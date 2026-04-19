@@ -1,0 +1,15 @@
+.git
+.gitignore
+.claude
+.venv
+__pycache__
+*.pyc
+data/jobs
+data/outputs
+data/pdfs
+data/templates
+data/sr_jobs.db
+tests
+docs
+.env
+.env.test

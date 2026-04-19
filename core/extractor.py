@@ -14,6 +14,8 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
+import os as _os
+
 from google import genai
 from google.genai import types
 
@@ -22,6 +24,14 @@ from config.settings import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def make_client(api_key: str):
+    """Return a Gemini client. Honours TEST_MODE for smoke/integration tests."""
+    if _os.getenv("TEST_MODE", "").lower() == "true":
+        from tests.fake_gemini import FakeGeminiClient
+        return FakeGeminiClient(api_key=api_key)
+    return genai.Client(api_key=api_key)
 
 
 class RateLimitError(Exception):
@@ -105,7 +115,7 @@ async def call_gemini(api_key: str, prompt: str) -> tuple[str, int, int]:
     PermanentAPIError on 4xx.
     """
     def _sync():
-        client = genai.Client(api_key=api_key)
+        client = make_client(api_key=api_key)
         try:
             resp = client.models.generate_content(
                 model=GEMINI_MODEL,

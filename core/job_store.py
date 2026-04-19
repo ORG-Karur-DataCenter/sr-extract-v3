@@ -192,6 +192,11 @@ class JobStore:
             ).fetchall()
             return [self._row_to_dict(r) for r in rows]
 
+    def study_count(self) -> int:
+        """Return total number of registered studies."""
+        with self._lock:
+            return self._conn.execute("SELECT COUNT(*) FROM studies").fetchone()[0]
+
     def mark_study_written(self, study_id: str, final_record: dict):
         now = time.time()
         with self._lock:
