@@ -37,7 +37,19 @@ GEMINI_RPD_LIMIT = int(os.getenv("GEMINI_RPD_LIMIT", "1500"))
 SAFETY_THRESHOLD = 0.85
 
 # ── Concurrency ──────────────────────────────────────────────────────
-MAX_CONCURRENT_WORKERS = int(os.getenv("MAX_CONCURRENT_WORKERS", "4"))
+def _auto_workers(n_keys: int) -> int:
+    """Derive safe worker count from key count.
+
+    Formula: each key handles ~12 RPM (85% of 15 RPM limit).
+    Each worker uses ~4 RPM on average. Cap at n_keys * 2.
+    """
+    if n_keys == 0:
+        return 1
+    workers = max(1, int(n_keys * 12 / 4))
+    return min(workers, n_keys * 2)
+
+_workers_env = os.getenv("MAX_CONCURRENT_WORKERS", "")
+MAX_CONCURRENT_WORKERS = int(_workers_env) if _workers_env.strip() else _auto_workers(len(GEMINI_API_KEYS))
 
 # ── Retry strategy ───────────────────────────────────────────────────
 MAX_RETRIES = 5
