@@ -205,3 +205,9 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Per-job sandboxes (runtime only, never committed)
+data/jobs/
+
+# Reserved test key (never committed)
+.env.test
