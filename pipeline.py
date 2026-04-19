@@ -18,6 +18,7 @@ import asyncio
 import logging
 import signal
 import sys
+import time
 from pathlib import Path
 
 from rich.console import Console
@@ -36,6 +37,33 @@ from output.writer import IncrementalWriter
 import ingest
 
 console = Console()
+
+
+class ProgressTracker:
+    """Tracks chunk completion rate for ETA calculation."""
+    def __init__(self):
+        self._start = time.time()
+
+    def eta(self, done: int, total: int) -> str:
+        if done == 0:
+            return "calculating..."
+        elapsed = time.time() - self._start
+        rate = done / elapsed
+        remaining = total - done
+        if rate <= 0:
+            return "unknown"
+        secs = remaining / rate
+        if secs < 60:
+            return f"{int(secs)}s"
+        if secs < 3600:
+            return f"{int(secs/60)}m {int(secs%60)}s"
+        return f"{int(secs/3600)}h {int((secs%3600)/60)}m"
+
+    def rate_per_min(self, done: int) -> float:
+        elapsed = time.time() - self._start
+        return round(done / elapsed * 60, 1) if elapsed > 0 else 0.0
+
+
 log = logging.getLogger("pipeline")
 
 
@@ -78,15 +106,18 @@ async def aggregator_loop(store: JobStore, writer: IncrementalWriter, stop_event
         completed = store.get_completed_studies()
         for study in completed:
             study_id = study["study_id"]
-            agg = aggregate_study(store, study_id, writer.fields)
-            if agg is None:
-                continue
-            record = agg.record
-            writer.write_row(study_id, record)
-            store.mark_study_written(study_id, record)
-            log.info(f"[green]Wrote study[/green] {study_id} "
-                     f"({sum(1 for v in record.values() if v)} fields, "
-                     f"{len(agg.conflicts)} conflicts)")
+            try:
+                agg = aggregate_study(store, study_id, writer.fields)
+                if agg is None:
+                    continue
+                record = agg.record
+                writer.write_row(study_id, record)
+                store.mark_study_written(study_id, record)
+                log.info(f"[green]Wrote study[/green] {study_id} "
+                         f"({sum(1 for v in record.values() if v)} fields, "
+                         f"{len(agg.conflicts)} conflicts)")
+            except Exception as exc:
+                log.warning(f"Write failed for {study_id}, will retry: {exc}")
         await asyncio.sleep(2)
 
 
