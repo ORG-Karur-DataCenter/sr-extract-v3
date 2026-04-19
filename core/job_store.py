@@ -209,5 +209,14 @@ class JobStore:
             ).fetchall()
             return {r["status"]: r["n"] for r in rows}
 
+    def get_study_stats(self) -> dict:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT status, COUNT(*) FROM studies GROUP BY status"
+            ).fetchall()
+        stats = {r[0]: r[1] for r in rows}
+        total = sum(stats.values())
+        return {"written": stats.get("written", 0), "total": total}
+
     def close(self):
         self._conn.close()

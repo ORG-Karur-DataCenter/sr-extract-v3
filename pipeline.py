@@ -85,18 +85,42 @@ def require_keys():
         sys.exit(1)
 
 
-def build_status_table(store: JobStore, keys: KeyManager) -> Table:
+def build_dashboard(store: JobStore, keys: KeyManager, tracker: ProgressTracker) -> Table:
+    from rich import box
     stats = store.stats()
-    tbl = Table(title="sr-extract-v3 — live status", show_header=True)
-    tbl.add_column("Metric")
-    tbl.add_column("Value", justify="right")
-    tbl.add_row("Pending", str(stats.get("pending", 0)))
-    tbl.add_row("In progress", str(stats.get("in_progress", 0)))
-    tbl.add_row("Done", f"[green]{stats.get('done', 0)}[/green]")
-    tbl.add_row("Failed", f"[red]{stats.get('failed', 0)}[/red]")
-    tbl.add_row("", "")
+    done = stats.get("done", 0)
+    pending = stats.get("pending", 0)
+    in_prog = stats.get("in_progress", 0)
+    failed = stats.get("failed", 0)
+    total_jobs = done + pending + in_prog + failed
+
+    study_stats = store.get_study_stats()
+    studies_written = study_stats.get("written", 0)
+    studies_total = study_stats.get("total", 0)
+    studies_remaining = studies_total - studies_written
+
+    tbl = Table(
+        title="[bold cyan]sr-extract-v3[/bold cyan]",
+        box=box.ROUNDED,
+        show_header=True,
+        header_style="bold magenta",
+    )
+    tbl.add_column("", style="dim")
+    tbl.add_column("Chunks", justify="right")
+    tbl.add_column("Articles", justify="right")
+
+    tbl.add_row("[green]Done / Written[/green]", f"[green]{done}[/green]", f"[green]{studies_written}[/green]")
+    tbl.add_row("[yellow]In Progress[/yellow]", f"[yellow]{in_prog}[/yellow]", "")
+    tbl.add_row("Pending", str(pending), str(studies_remaining))
+    tbl.add_row("[red]Failed[/red]", f"[red]{failed}[/red]" if failed else "0", "")
+    tbl.add_section()
+    tbl.add_row("Total", str(total_jobs), str(studies_total))
+    tbl.add_section()
+    tbl.add_row("[cyan]Rate[/cyan]", f"[cyan]{tracker.rate_per_min(done)} chunks/min[/cyan]", "")
+    tbl.add_row("[cyan]ETA[/cyan]", f"[cyan]{tracker.eta(done, total_jobs)}[/cyan]", "")
+    tbl.add_section()
     for k in keys.status():
-        tbl.add_row(f"Key {k['key']}", f"RPM {k['rpm']}  TPM {k['tpm']}  fail {k['failures']}")
+        tbl.add_row(f"[dim]…{k['key'][-6:]}[/dim]", f"[dim]RPM {k['rpm']}[/dim]", f"[dim]fail {k['failures']}[/dim]")
     return tbl
 
 
@@ -162,10 +186,11 @@ async def run_pipeline(resume: bool = False, ingest_only: bool = False):
     aggregator_task = asyncio.create_task(aggregator_loop(store, writer, stop))
 
     # Live status
+    tracker = ProgressTracker()
     try:
-        with Live(build_status_table(store, keys), refresh_per_second=1, console=console) as live:
+        with Live(build_dashboard(store, keys, tracker), refresh_per_second=1, console=console) as live:
             while not worker_task.done():
-                live.update(build_status_table(store, keys))
+                live.update(build_dashboard(store, keys, tracker))
                 await asyncio.sleep(1.5)
     finally:
         stop.set()
