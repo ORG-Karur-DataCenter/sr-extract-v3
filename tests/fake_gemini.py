@@ -24,5 +24,11 @@ class FakeGeminiClient:
 
     def generate_content(self, *, model: str, contents, **_kwargs):
         path = FIXTURES / f"{self._fixture}.json"
+        if not path.exists():
+            available = [p.stem for p in FIXTURES.glob("*.json")]
+            raise FileNotFoundError(
+                f"FakeGeminiClient: fixture '{self._fixture}' not found at {path}. "
+                f"Available: {available}"
+            )
         payload = json.loads(path.read_text())
         return FakeGeminiResponse(text=json.dumps(payload))
