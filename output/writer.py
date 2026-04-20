@@ -27,17 +27,38 @@ _WRITE_LOCK = threading.Lock()
 
 
 def _default_headers(record: dict, template_fields: list[str]) -> list[str]:
-    """Template fields first, then metadata keys (underscore-prefixed) last."""
-    meta = sorted(k for k in record.keys() if k.startswith("_"))
-    return list(template_fields) + meta
+    """_study_id first, then template fields, then other metadata last."""
+    meta = sorted(k for k in record.keys() if k.startswith("_") and k != "_study_id")
+    study_id = ["_study_id"] if "_study_id" in record else []
+    return study_id + list(template_fields) + meta
+
+
+def _flatten(value: Any, depth: int = 0) -> str:
+    """Recursively flatten dicts/lists to a human-readable string.
+
+    {"Nonobese": {"baseline": "51.42", "2-yr": "36.07"}, "Obese": {...}}
+    → "Nonobese: baseline: 51.42; 2-yr: 36.07 | Obese: ..."
+    """
+    if value is None:
+        return ""
+    if isinstance(value, dict):
+        sep = " | " if depth == 0 else "; "
+        parts = []
+        for k, v in value.items():
+            inner = _flatten(v, depth + 1)
+            parts.append(f"{k}: {inner}")
+        return sep.join(parts)
+    if isinstance(value, list):
+        return "; ".join(_flatten(v, depth + 1) for v in value)
+    return str(value)
 
 
 def _serialize(value: Any) -> str:
-    """Flatten dicts/lists to JSON string so Excel cells don't break."""
+    """Convert any value to an Excel-safe string, flattening nested structures."""
     if value is None:
         return ""
     if isinstance(value, (dict, list)):
-        return json.dumps(value, ensure_ascii=False)
+        return _flatten(value)
     return str(value)
 
 
