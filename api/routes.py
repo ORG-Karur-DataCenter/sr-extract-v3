@@ -144,6 +144,14 @@ async def get_job_result(request: Request, job_id: str, background: BackgroundTa
         return _err("job_not_found", f"No job with id {job_id!r}", 404)
     if ctx.status != "done" or ctx.result_path is None:
         return _err("not_ready", f"Job status is {ctx.status!r}", 409)
+    # Guard against a stale result_path whose file has been removed
+    # (e.g. sandbox cleanup raced ahead, or writer never flushed).
+    if not ctx.result_path.exists():
+        return _err(
+            "result_missing",
+            "Result file is not available on disk",
+            409,
+        )
 
     def _cleanup():
         try:

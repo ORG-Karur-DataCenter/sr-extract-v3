@@ -144,10 +144,29 @@ async def run_pipeline_for_job(ctx: JobContext) -> None:
         )
 
         # ── 8. Finalise ──────────────────────────────────────────────
-        ctx.result_path = writer.output_path
-        ctx.status = "done"
-        ctx.touch()
-        log.info(f"Job {ctx.job_id} done. Output: {ctx.result_path}")
+        # If every study failed and no output file was produced, mark
+        # the job as failed rather than silently reporting "done".
+        output_path = writer.output_path
+        if ctx.studies_done == 0 or not output_path.exists():
+            ctx.status = "failed"
+            ctx.error_code = "no_studies_extracted"
+            ctx.error_message = (
+                f"Pipeline finished but produced no output "
+                f"(studies_done={ctx.studies_done}, "
+                f"studies_failed={ctx.studies_failed}, "
+                f"chunks_done={ctx.chunks_done}/{ctx.chunks_total})."
+            )
+            ctx.result_path = None
+            ctx.touch()
+            log.error(
+                f"Job {ctx.job_id} marked failed: no studies extracted "
+                f"(chunks_done={ctx.chunks_done}/{ctx.chunks_total})"
+            )
+        else:
+            ctx.result_path = output_path
+            ctx.status = "done"
+            ctx.touch()
+            log.info(f"Job {ctx.job_id} done. Output: {ctx.result_path}")
 
     except asyncio.TimeoutError:
         log.error(f"Job {ctx.job_id} timed out after {_JOB_TIMEOUT_SECONDS}s")

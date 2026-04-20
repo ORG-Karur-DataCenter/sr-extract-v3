@@ -29,7 +29,7 @@ log = logging.getLogger(__name__)
 def make_client(api_key: str):
     """Return a Gemini client. Honours TEST_MODE for smoke/integration tests."""
     if _os.getenv("TEST_MODE", "").lower() == "true":
-        from tests.fake_gemini import FakeGeminiClient
+        from core._test_support.fake_gemini import FakeGeminiClient
         return FakeGeminiClient(api_key=api_key)
     return genai.Client(api_key=api_key)
 
