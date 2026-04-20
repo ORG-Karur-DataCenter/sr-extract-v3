@@ -1,0 +1,12 @@
+{
+  "author": "Smith et al.",
+  "year": "2021",
+  "title": "Effects of X on Y",
+  "population": "Adults with condition Z",
+  "sample_size": "120",
+  "intervention": "Drug A",
+  "comparator": "Placebo",
+  "primary_outcome": "Reduction in symptom score",
+  "effect_size": "0.45",
+  "p_value": "0.02"
+}
