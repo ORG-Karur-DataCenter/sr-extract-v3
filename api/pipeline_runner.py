@@ -149,13 +149,14 @@ async def run_pipeline_for_job(ctx: JobContext) -> None:
         # the job as failed rather than silently reporting "done".
         output_path = writer.output_path
         if ctx.studies_done == 0 or not output_path.exists():
+            # Surface the actual chunk-level error so users know why
+            chunk_errors = store.failed_error_messages(limit=3)
+            error_detail = "; ".join(chunk_errors) if chunk_errors else "all chunks failed"
             ctx.status = "failed"
             ctx.error_code = "no_studies_extracted"
             ctx.error_message = (
-                f"Pipeline finished but produced no output "
-                f"(studies_done={ctx.studies_done}, "
-                f"studies_failed={ctx.studies_failed}, "
-                f"chunks_done={ctx.chunks_done}/{ctx.chunks_total})."
+                f"No studies extracted — {error_detail}. "
+                f"(chunks_done={ctx.chunks_done}/{ctx.chunks_total})"
             )
             ctx.result_path = None
             ctx.touch()

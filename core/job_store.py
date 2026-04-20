@@ -214,5 +214,15 @@ class JobStore:
             ).fetchall()
             return {r["status"]: r["n"] for r in rows}
 
+    def failed_error_messages(self, limit: int = 3) -> list[str]:
+        """Return up to ``limit`` distinct error_msg values from failed chunks."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT DISTINCT error_msg FROM jobs "
+                "WHERE status='failed' AND error_msg IS NOT NULL LIMIT ?",
+                (limit,),
+            ).fetchall()
+            return [r["error_msg"] for r in rows if r["error_msg"]]
+
     def close(self):
         self._conn.close()
