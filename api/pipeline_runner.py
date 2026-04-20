@@ -99,6 +99,7 @@ async def run_pipeline_for_job(ctx: JobContext) -> None:
             expected_fields=fields,
             max_concurrent=MAX_CONCURRENT_WORKERS,
             on_progress=_on_progress,
+            model=ctx.model,
         )
 
         # ── 5. Set up incremental writer ─────────────────────────────
