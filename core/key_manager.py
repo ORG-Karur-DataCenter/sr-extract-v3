@@ -88,8 +88,18 @@ class KeyManager:
     def mark_rate_limited(self, key: str, retry_after: float = 60.0):
         with self._lock:
             s = self.states[key]
+            # Escalate block time if this key has been rate-limited before
+            # (signals shared project quota — all keys are exhausted together)
+            if s.failure_count >= 2:
+                retry_after = max(retry_after, 90.0)
             s.blocked_until = time.time() + retry_after
             s.failure_count += 1
+
+    def all_blocked(self) -> bool:
+        """Return True if every key is currently blocked (429 cooldown)."""
+        now = time.time()
+        with self._lock:
+            return all(now < s.blocked_until for s in self.states.values())
 
     def mark_failure(self, key: str):
         with self._lock:
