@@ -31,12 +31,14 @@ class Worker:
     def __init__(self, store: JobStore, keys: KeyManager,
                  expected_fields: list[str],
                  max_concurrent: int = MAX_CONCURRENT_WORKERS,
-                 on_progress: Optional[Callable[[str, dict], None]] = None):
+                 on_progress: Optional[Callable[[str, dict], None]] = None,
+                 model: Optional[str] = None):
         self.store = store
         self.keys = keys
         self.expected_fields = expected_fields
         self.sem = asyncio.Semaphore(max_concurrent)
         self.on_progress = on_progress
+        self.model = model  # None → extractor falls back to GEMINI_MODEL
         self._stop = False
 
     async def run(self):
@@ -92,6 +94,7 @@ class Worker:
                     section_name=row.get("section_name"),
                     gemini_key=key,
                     use_fallback=use_fallback,
+                    model=self.model,
                 )
             except RateLimitError as e:
                 self.keys.mark_rate_limited(key, e.retry_after)

@@ -108,17 +108,22 @@ def parse_json_response(text: str) -> dict:
 
 
 # ── Gemini client (google.genai SDK) ─────────────────────────────────
-async def call_gemini(api_key: str, prompt: str) -> tuple[str, int, int]:
+async def call_gemini(api_key: str, prompt: str,
+                      model: Optional[str] = None) -> tuple[str, int, int]:
     """Invoke Gemini. Returns (text, tokens_in, tokens_out).
 
     Raises RateLimitError on 429, TransientAPIError on 503/timeout,
     PermanentAPIError on 4xx.
+
+    If ``model`` is None, falls back to the configured GEMINI_MODEL.
     """
+    effective_model = model or GEMINI_MODEL
+
     def _sync():
         client = make_client(api_key=api_key)
         try:
             resp = client.models.generate_content(
-                model=GEMINI_MODEL,
+                model=effective_model,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     system_instruction=_SYSTEM_PROMPT,
@@ -184,14 +189,18 @@ async def extract_chunk(chunk_text: str,
                         fields: list[str],
                         section_name: Optional[str],
                         gemini_key: str,
-                        use_fallback: bool = False) -> ExtractionResult:
-    """High-level extract. Tries Gemini, optionally falls back to Claude."""
+                        use_fallback: bool = False,
+                        model: Optional[str] = None) -> ExtractionResult:
+    """High-level extract. Tries Gemini, optionally falls back to Claude.
+
+    If ``model`` is None, uses the configured default (GEMINI_MODEL).
+    """
     prompt = build_prompt(chunk_text, fields, section_name)
 
     if not use_fallback:
-        text, tin, tout = await call_gemini(gemini_key, prompt)
+        text, tin, tout = await call_gemini(gemini_key, prompt, model=model)
         data = parse_json_response(text)
-        return ExtractionResult(data=data, model_used=GEMINI_MODEL,
+        return ExtractionResult(data=data, model_used=(model or GEMINI_MODEL),
                                 tokens_in=tin, tokens_out=tout)
     else:
         if not USE_CLAUDE_FALLBACK:
