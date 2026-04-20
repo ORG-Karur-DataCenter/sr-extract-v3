@@ -62,7 +62,10 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
-install_cors(app)
+# Middleware order matters: last-added = outermost (runs first).
+# CORS must be outermost so it adds Access-Control headers even on
+# 429/503 error responses produced by the rate limiter.
 install_rate_limiter(app)
 install_size_limit(app)
+install_cors(app)   # outermost — always wraps every response
 app.include_router(router)
