@@ -135,11 +135,23 @@ class Worker:
                     log.warning(
                         f"[{job_id[:12]}] 429 on key {key[:8]}… "
                         f"(blocked {e.retry_after:.0f}s). "
-                        f"Rate-limit attempt {rate_limit_attempts}/{_MAX_429_RETRIES}"
+                        f"Attempt {rate_limit_attempts}/{_MAX_429_RETRIES}. "
+                        f"Error: {str(e)[:200]}"
                     )
-                    # Don't burn through retries on 429 — just try next key.
-                    # Short sleep to avoid hammering the API.
-                    await asyncio.sleep(2)
+                    # If all keys are now blocked, log status + wait for reset
+                    if self.keys.all_blocked():
+                        wait = self.keys.earliest_reset()
+                        key_info = "; ".join(
+                            f"{s['key']} fail={s['failures']}"
+                            for s in self.keys.status()
+                        )
+                        log.warning(
+                            f"[{job_id[:12]}] ALL keys blocked. "
+                            f"Waiting {wait:.0f}s for reset. Keys: {key_info}"
+                        )
+                        await asyncio.sleep(min(wait, 60))
+                    else:
+                        await asyncio.sleep(2)
                     continue  # ← try next key, don't requeue
                 except TransientAPIError as e:
                     delay = backoff_with_jitter(retries + 1)
@@ -157,6 +169,7 @@ class Worker:
                     return
 
                 # ── Success path ─────────────────────────────────────
+                self.keys.mark_success(key)
                 log.info(
                     f"[{job_id[:12]}] ✓ extracted with key {key[:8]}… "
                     f"({result.tokens_in + result.tokens_out} tokens)"

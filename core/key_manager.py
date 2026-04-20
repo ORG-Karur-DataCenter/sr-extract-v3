@@ -83,7 +83,14 @@ class KeyManager:
             s.tpm_used += tokens_used
             s.rpd_used += 1
             s.last_used_at = now
-            s.failure_count = 0
+            # Note: failure_count is NOT reset here — only on explicit
+            # mark_success() so the pre-increment call doesn't wipe
+            # rate-limit escalation history.
+
+    def mark_success(self, key: str):
+        """Reset failure count after a successful API call."""
+        with self._lock:
+            self.states[key].failure_count = 0
 
     def mark_rate_limited(self, key: str, retry_after: float = 60.0):
         with self._lock:
