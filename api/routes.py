@@ -1,12 +1,15 @@
 """FastAPI route handlers for sr-extract-v3."""
 from __future__ import annotations
 import asyncio
+import os
 import time as _time
 from datetime import datetime, timezone
 from typing import List
 
 from fastapi import APIRouter, BackgroundTasks, File, Form, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from api.job_context import JobContext
 from api.job_manager import JobNotFoundError, ServerBusyError
@@ -15,6 +18,11 @@ from api.schemas import (
     ErrorResponse, HealthResponse, JobAcceptedResponse, JobStatusResponse,
     validate_model,
 )
+
+# Rate limit applied only to job creation (expensive); polling endpoints
+# are intentionally exempt so the frontend can poll freely.
+_limiter = Limiter(key_func=get_remote_address)
+_JOB_CREATE_LIMIT = os.getenv("RATE_LIMIT", "10/hour")
 
 router = APIRouter()
 
@@ -49,6 +57,7 @@ async def health(request: Request) -> HealthResponse:
 # ---------------------------------------------------------------------------
 
 @router.post("/jobs", response_model=JobAcceptedResponse)
+@_limiter.limit(_JOB_CREATE_LIMIT)
 async def post_job(
     request: Request,
     api_keys: str = Form(""),

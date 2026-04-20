@@ -70,9 +70,12 @@ def install_cors(app: FastAPI) -> None:
 # ---------------------------------------------------------------------------
 
 def install_rate_limiter(app: FastAPI) -> Limiter:
+    # No default_limits — we apply limits explicitly per route so that
+    # polling endpoints (GET /health, GET /jobs/{id}/status) are never
+    # throttled. Only POST /jobs (job creation) is rate-limited.
     limiter = Limiter(
         key_func=get_remote_address,
-        default_limits=[os.getenv("RATE_LIMIT", "10/hour")],
+        default_limits=[],
     )
     app.state.limiter = limiter
     app.add_middleware(SlowAPIMiddleware)
@@ -81,7 +84,7 @@ def install_rate_limiter(app: FastAPI) -> Limiter:
     async def _rate_limit_handler(request, exc):  # pragma: no cover
         return JSONResponse(
             status_code=429,
-            content={"error_code": "server_busy",
+            content={"error_code": "rate_limit_exceeded",
                      "error_message": f"Rate limit exceeded: {exc.detail}"},
             headers={"Retry-After": "60"},
         )
