@@ -25,8 +25,8 @@ from rich.live import Live
 from rich.table import Table
 
 from config.settings import (
-    GEMINI_API_KEYS, PDF_DIR, TEMPLATE_DIR, OUTPUT_DIR, OUTPUT_FORMAT,
-    LOG_LEVEL,
+    GEMINI_API_KEYS, GEMINI_MODEL, PDF_DIR, TEMPLATE_DIR, OUTPUT_DIR,
+    OUTPUT_FORMAT, LOG_LEVEL, get_model_limits,
 )
 from core.job_store import JobStore
 from core.key_manager import KeyManager
@@ -108,7 +108,14 @@ async def run_pipeline(resume: bool = False, ingest_only: bool = False):
     schema = ingest.get_cached_schema()
     fields = schema["fields"]
 
-    keys = KeyManager(GEMINI_API_KEYS)
+    limits = get_model_limits(GEMINI_MODEL)
+    console.print(f"  Model: {GEMINI_MODEL}  RPM={limits['rpm']}  RPD={limits['rpd']}")
+    keys = KeyManager(
+        GEMINI_API_KEYS,
+        rpm_limit=limits['rpm'],
+        tpm_limit=limits['tpm'],
+        rpd_limit=limits['rpd'],
+    )
     writer = IncrementalWriter(fields, OUTPUT_DIR, fmt=OUTPUT_FORMAT)
 
     worker = Worker(store, keys, expected_fields=fields)

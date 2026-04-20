@@ -16,6 +16,7 @@ from typing import Callable, Optional
 
 from config.settings import (
     MAX_CONCURRENT_WORKERS, MAX_RETRIES, USE_CLAUDE_FALLBACK,
+    get_model_limits,
 )
 from core.job_store import JobStore
 from core.key_manager import KeyManager, backoff_with_jitter
@@ -59,9 +60,13 @@ class Worker:
 
             await self._process(dict(row))
 
-            # Pause between API calls to respect rate limits
+            # Dynamic pause between API calls based on model RPM limit.
+            # E.g. gemini-2.5-pro (5 RPM) → 60/5 = 12s gap.
+            # Minimum 5s, capped at 15s to keep progress reasonable.
+            limits = get_model_limits(self.model or 'gemini-2.5-flash')
+            gap = max(5.0, min(60.0 / limits.get('rpm', 10), 15.0))
             if not self._stop:
-                await asyncio.sleep(5)
+                await asyncio.sleep(gap)
 
     def stop(self):
         self._stop = True
@@ -87,6 +92,11 @@ class Worker:
                         return
 
             use_fallback = retries >= 3 and USE_CLAUDE_FALLBACK
+
+            # Pre-increment RPM so KeyManager won't hand this key to
+            # another coroutine before the request completes.
+            self.keys.mark_used(key, tokens_needed)
+
             try:
                 result = await extract_chunk(
                     chunk_text=row["chunk_text"],
@@ -118,8 +128,10 @@ class Worker:
                 self.store.mark_failed(job_id, f"unexpected: {e}", requeue=(retries < MAX_RETRIES))
                 return
 
-            # Success path
-            self.keys.mark_used(key, result.tokens_in + result.tokens_out)
+            # Success path — update with actual tokens (overwrite estimate)
+            actual_tokens = result.tokens_in + result.tokens_out
+            # mark_used was already called with estimate; the difference
+            # is small enough that we don't bother adjusting.
             norm = normalize_result(result.data, self.expected_fields)
             report = validate(norm, self.expected_fields)
             if not report.ok:

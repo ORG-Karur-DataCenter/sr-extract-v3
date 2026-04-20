@@ -61,7 +61,7 @@ async def health(request: Request) -> HealthResponse:
 async def post_job(
     request: Request,
     api_keys: str = Form(""),
-    model: str = Form("gemini-2.0-flash"),
+    model: str = Form("gemini-2.5-flash"),
     output_format: str = Form("xlsx"),
     pdfs: List[UploadFile] = File(default=[]),
     template: UploadFile | None = File(default=None),

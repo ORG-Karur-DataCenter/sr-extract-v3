@@ -26,12 +26,40 @@ from config.settings import (
 log = logging.getLogger(__name__)
 
 
+# Client cache — one genai.Client per API key to reuse connections
+_client_cache: dict[str, object] = {}
+_client_lock = __import__('threading').Lock()
+
+
 def make_client(api_key: str):
-    """Return a Gemini client. Honours TEST_MODE for smoke/integration tests."""
+    """Return a Gemini client. Honours TEST_MODE for smoke/integration tests.
+    Clients are cached per key to avoid creating a new connection each call.
+    """
     if _os.getenv("TEST_MODE", "").lower() == "true":
         from core._test_support.fake_gemini import FakeGeminiClient
         return FakeGeminiClient(api_key=api_key)
-    return genai.Client(api_key=api_key)
+    with _client_lock:
+        if api_key not in _client_cache:
+            _client_cache[api_key] = genai.Client(api_key=api_key)
+        return _client_cache[api_key]
+
+
+def _parse_retry_after(error_msg: str) -> float:
+    """Try to extract a retry-after delay from the error message.
+    Falls back to 60s if unparseable.
+    """
+    import re as _re
+    # Look for patterns like 'retry after 30s', 'retry_after: 45', 'Retry-After: 60'
+    m = _re.search(r'retry[_\- ]?after[:\s]*([\d.]+)', error_msg, _re.IGNORECASE)
+    if m:
+        val = float(m.group(1))
+        return max(10.0, min(val, 300.0))  # clamp 10s..300s
+    # Look for 'wait X seconds'
+    m = _re.search(r'wait\s+([\d.]+)\s*s', error_msg, _re.IGNORECASE)
+    if m:
+        val = float(m.group(1))
+        return max(10.0, min(val, 300.0))
+    return 60.0
 
 
 class RateLimitError(Exception):
@@ -135,8 +163,9 @@ async def call_gemini(api_key: str, prompt: str,
             msg = str(e).lower()
             if "404" in msg or "not found" in msg:
                 raise PermanentAPIError(f"Model not found: {e}")
-            if "429" in msg or "quota" in msg or "rate" in msg:
-                raise RateLimitError(retry_after=60, message=str(e))
+            if "429" in msg or "quota" in msg or "rate" in msg or "resource_exhausted" in msg:
+                retry_secs = _parse_retry_after(msg)
+                raise RateLimitError(retry_after=retry_secs, message=str(e))
             if "503" in msg or "overload" in msg or "unavailable" in msg:
                 raise TransientAPIError(str(e))
             if "500" in msg or "internal" in msg:

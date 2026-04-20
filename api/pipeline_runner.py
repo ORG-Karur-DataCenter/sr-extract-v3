@@ -18,7 +18,7 @@ from core.key_manager import KeyManager
 from core.worker import Worker
 from config.settings import (
     GEMINI_RPM_LIMIT, GEMINI_TPM_LIMIT, GEMINI_RPD_LIMIT,
-    MAX_CONCURRENT_WORKERS,
+    MAX_CONCURRENT_WORKERS, get_model_limits,
 )
 from ingest import ingest_all, load_template, discover_template
 from output.writer import IncrementalWriter
@@ -82,11 +82,17 @@ async def run_pipeline_for_job(ctx: JobContext) -> None:
         ctx.touch()
 
         # ── 4. Build KeyManager and Worker ───────────────────────────
+        # Use model-specific rate limits to avoid 429s on stricter models
+        limits = get_model_limits(ctx.model)
+        log.info(
+            f"Model {ctx.model} → RPM={limits['rpm']}, "
+            f"TPM={limits['tpm']}, RPD={limits['rpd']}"
+        )
         key_manager = KeyManager(
             keys=ctx.api_keys,
-            rpm_limit=GEMINI_RPM_LIMIT,
-            tpm_limit=GEMINI_TPM_LIMIT,
-            rpd_limit=GEMINI_RPD_LIMIT,
+            rpm_limit=limits["rpm"],
+            tpm_limit=limits["tpm"],
+            rpd_limit=limits["rpd"],
         )
 
         def _on_progress(job_id: str, info: dict) -> None:
