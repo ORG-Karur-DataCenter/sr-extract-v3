@@ -151,31 +151,47 @@ async def get_job_result(request: Request, job_id: str, background: BackgroundTa
         ctx = mgr.get(job_id)
     except JobNotFoundError:
         return _err("job_not_found", f"No job with id {job_id!r}", 404)
-    if ctx.status != "done" or ctx.result_path is None:
+
+    # For running jobs, serve partial results if the output file already
+    # exists on disk (IncrementalWriter flushes after each study).
+    is_partial = ctx.status == "running"
+    if not is_partial and (ctx.status != "done" or ctx.result_path is None):
         return _err("not_ready", f"Job status is {ctx.status!r}", 409)
-    # Guard against a stale result_path whose file has been removed
-    # (e.g. sandbox cleanup raced ahead, or writer never flushed).
-    if not ctx.result_path.exists():
+
+    # Resolve output path: for running jobs the result_path may not be set
+    # yet, but the writer file exists in the sandbox.
+    output_path = ctx.result_path
+    if output_path is None and is_partial:
+        # IncrementalWriter writes to <sandbox>/output.<fmt>
+        candidate = ctx.sandbox / f"output.{ctx.output_format}"
+        if candidate.exists():
+            output_path = candidate
+
+    if output_path is None or not output_path.exists():
+        if is_partial:
+            return _err("not_ready", "No studies completed yet", 409)
         return _err(
             "result_missing",
             "Result file is not available on disk",
             409,
         )
 
-    def _cleanup():
-        try:
-            mgr.dispose(job_id)
-        except JobNotFoundError:
-            pass
+    # Only cleanup after downloading the final result (not partial).
+    if not is_partial:
+        def _cleanup():
+            try:
+                mgr.dispose(job_id)
+            except JobNotFoundError:
+                pass
+        background.add_task(_cleanup)
 
-    background.add_task(_cleanup)
     media = (
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         if ctx.output_format == "xlsx"
         else "text/csv"
     )
     filename = f"sr-extract-{job_id}.{ctx.output_format}"
-    return FileResponse(path=str(ctx.result_path), media_type=media, filename=filename)
+    return FileResponse(path=str(output_path), media_type=media, filename=filename)
 
 
 # ---------------------------------------------------------------------------
