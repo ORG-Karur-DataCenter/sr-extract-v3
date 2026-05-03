@@ -28,16 +28,36 @@ GEMINI_API_KEYS = [
 CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY", "").strip()
 
 # ── Rate limits (per API key, per minute) ────────────────────────────
-# Gemini 1.5 Flash free tier: 15 RPM, 1M TPM, 1500 RPD
-GEMINI_RPM_LIMIT = int(os.getenv("GEMINI_RPM_LIMIT", "15"))
+# Defaults are conservative — safe for gemini-2.5-flash free tier.
+# Override via env vars or use MODEL_RATE_LIMITS for model-specific caps.
+GEMINI_RPM_LIMIT = int(os.getenv("GEMINI_RPM_LIMIT", "10"))
 GEMINI_TPM_LIMIT = int(os.getenv("GEMINI_TPM_LIMIT", "1000000"))
-GEMINI_RPD_LIMIT = int(os.getenv("GEMINI_RPD_LIMIT", "1500"))
+GEMINI_RPD_LIMIT = int(os.getenv("GEMINI_RPD_LIMIT", "500"))
+
+# Per-model rate-limit overrides (free-tier, April 2026).
+# Looked up by get_model_limits() at pipeline start.
+MODEL_RATE_LIMITS: dict[str, dict[str, int]] = {
+    "gemini-2.0-flash":      {"rpm": 15,  "tpm": 1_000_000, "rpd": 1500},
+    "gemini-2.0-flash-lite": {"rpm": 30,  "tpm": 1_000_000, "rpd": 1500},
+    "gemini-2.5-flash":      {"rpm": 10,  "tpm": 1_000_000, "rpd": 500},
+    "gemini-2.5-pro":        {"rpm": 5,   "tpm": 1_000_000, "rpd": 25},
+}
+
+
+def get_model_limits(model: str) -> dict[str, int]:
+    """Return {rpm, tpm, rpd} for the given model, falling back to globals."""
+    return MODEL_RATE_LIMITS.get(model, {
+        "rpm": GEMINI_RPM_LIMIT,
+        "tpm": GEMINI_TPM_LIMIT,
+        "rpd": GEMINI_RPD_LIMIT,
+    })
 
 # Safety buffer — only use 85% of stated limit
 SAFETY_THRESHOLD = 0.85
 
 # ── Concurrency ──────────────────────────────────────────────────────
-MAX_CONCURRENT_WORKERS = int(os.getenv("MAX_CONCURRENT_WORKERS", "4"))
+# Keep at 1 for free-tier safety. Increase only with paid API keys.
+MAX_CONCURRENT_WORKERS = int(os.getenv("MAX_CONCURRENT_WORKERS", "1"))
 
 # ── Retry strategy ───────────────────────────────────────────────────
 MAX_RETRIES = 5
@@ -66,7 +86,7 @@ SKIP_SECTIONS = [
 ]
 
 # ── Models ───────────────────────────────────────────────────────────
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5")
 USE_CLAUDE_FALLBACK = bool(CLAUDE_API_KEY)
 

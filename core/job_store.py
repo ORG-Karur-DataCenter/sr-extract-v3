@@ -192,6 +192,11 @@ class JobStore:
             ).fetchall()
             return [self._row_to_dict(r) for r in rows]
 
+    def study_count(self) -> int:
+        """Return total number of registered studies."""
+        with self._lock:
+            return self._conn.execute("SELECT COUNT(*) FROM studies").fetchone()[0]
+
     def mark_study_written(self, study_id: str, final_record: dict):
         now = time.time()
         with self._lock:
@@ -208,6 +213,16 @@ class JobStore:
                 "SELECT status, COUNT(*) as n FROM jobs GROUP BY status"
             ).fetchall()
             return {r["status"]: r["n"] for r in rows}
+
+    def failed_error_messages(self, limit: int = 3) -> list[str]:
+        """Return up to ``limit`` distinct error_msg values from failed chunks."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT DISTINCT error_msg FROM jobs "
+                "WHERE status='failed' AND error_msg IS NOT NULL LIMIT ?",
+                (limit,),
+            ).fetchall()
+            return [r["error_msg"] for r in rows if r["error_msg"]]
 
     def close(self):
         self._conn.close()

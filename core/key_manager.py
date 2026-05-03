@@ -83,13 +83,30 @@ class KeyManager:
             s.tpm_used += tokens_used
             s.rpd_used += 1
             s.last_used_at = now
-            s.failure_count = 0
+            # Note: failure_count is NOT reset here — only on explicit
+            # mark_success() so the pre-increment call doesn't wipe
+            # rate-limit escalation history.
+
+    def mark_success(self, key: str):
+        """Reset failure count after a successful API call."""
+        with self._lock:
+            self.states[key].failure_count = 0
 
     def mark_rate_limited(self, key: str, retry_after: float = 60.0):
         with self._lock:
             s = self.states[key]
+            # Escalate block time if this key has been rate-limited before
+            # (signals shared project quota — all keys are exhausted together)
+            if s.failure_count >= 2:
+                retry_after = max(retry_after, 90.0)
             s.blocked_until = time.time() + retry_after
             s.failure_count += 1
+
+    def all_blocked(self) -> bool:
+        """Return True if every key is currently blocked (429 cooldown)."""
+        now = time.time()
+        with self._lock:
+            return all(now < s.blocked_until for s in self.states.values())
 
     def mark_failure(self, key: str):
         with self._lock:

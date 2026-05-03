@@ -14,6 +14,8 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
+import os as _os
+
 from google import genai
 from google.genai import types
 
@@ -22,6 +24,42 @@ from config.settings import (
 )
 
 log = logging.getLogger(__name__)
+
+
+# Client cache — one genai.Client per API key to reuse connections
+_client_cache: dict[str, object] = {}
+_client_lock = __import__('threading').Lock()
+
+
+def make_client(api_key: str):
+    """Return a Gemini client. Honours TEST_MODE for smoke/integration tests.
+    Clients are cached per key to avoid creating a new connection each call.
+    """
+    if _os.getenv("TEST_MODE", "").lower() == "true":
+        from core._test_support.fake_gemini import FakeGeminiClient
+        return FakeGeminiClient(api_key=api_key)
+    with _client_lock:
+        if api_key not in _client_cache:
+            _client_cache[api_key] = genai.Client(api_key=api_key)
+        return _client_cache[api_key]
+
+
+def _parse_retry_after(error_msg: str) -> float:
+    """Try to extract a retry-after delay from the error message.
+    Falls back to 60s if unparseable.
+    """
+    import re as _re
+    # Look for patterns like 'retry after 30s', 'retry_after: 45', 'Retry-After: 60'
+    m = _re.search(r'retry[_\- ]?after[:\s]*([\d.]+)', error_msg, _re.IGNORECASE)
+    if m:
+        val = float(m.group(1))
+        return max(10.0, min(val, 300.0))  # clamp 10s..300s
+    # Look for 'wait X seconds'
+    m = _re.search(r'wait\s+([\d.]+)\s*s', error_msg, _re.IGNORECASE)
+    if m:
+        val = float(m.group(1))
+        return max(10.0, min(val, 300.0))
+    return 60.0
 
 
 class RateLimitError(Exception):
@@ -98,17 +136,22 @@ def parse_json_response(text: str) -> dict:
 
 
 # ── Gemini client (google.genai SDK) ─────────────────────────────────
-async def call_gemini(api_key: str, prompt: str) -> tuple[str, int, int]:
+async def call_gemini(api_key: str, prompt: str,
+                      model: Optional[str] = None) -> tuple[str, int, int]:
     """Invoke Gemini. Returns (text, tokens_in, tokens_out).
 
     Raises RateLimitError on 429, TransientAPIError on 503/timeout,
     PermanentAPIError on 4xx.
+
+    If ``model`` is None, falls back to the configured GEMINI_MODEL.
     """
+    effective_model = model or GEMINI_MODEL
+
     def _sync():
-        client = genai.Client(api_key=api_key)
+        client = make_client(api_key=api_key)
         try:
             resp = client.models.generate_content(
-                model=GEMINI_MODEL,
+                model=effective_model,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     system_instruction=_SYSTEM_PROMPT,
@@ -120,8 +163,9 @@ async def call_gemini(api_key: str, prompt: str) -> tuple[str, int, int]:
             msg = str(e).lower()
             if "404" in msg or "not found" in msg:
                 raise PermanentAPIError(f"Model not found: {e}")
-            if "429" in msg or "quota" in msg or "rate" in msg:
-                raise RateLimitError(retry_after=60, message=str(e))
+            if "429" in msg or "quota" in msg or "rate" in msg or "resource_exhausted" in msg:
+                retry_secs = _parse_retry_after(msg)
+                raise RateLimitError(retry_after=retry_secs, message=str(e))
             if "503" in msg or "overload" in msg or "unavailable" in msg:
                 raise TransientAPIError(str(e))
             if "500" in msg or "internal" in msg:
@@ -174,14 +218,18 @@ async def extract_chunk(chunk_text: str,
                         fields: list[str],
                         section_name: Optional[str],
                         gemini_key: str,
-                        use_fallback: bool = False) -> ExtractionResult:
-    """High-level extract. Tries Gemini, optionally falls back to Claude."""
+                        use_fallback: bool = False,
+                        model: Optional[str] = None) -> ExtractionResult:
+    """High-level extract. Tries Gemini, optionally falls back to Claude.
+
+    If ``model`` is None, uses the configured default (GEMINI_MODEL).
+    """
     prompt = build_prompt(chunk_text, fields, section_name)
 
     if not use_fallback:
-        text, tin, tout = await call_gemini(gemini_key, prompt)
+        text, tin, tout = await call_gemini(gemini_key, prompt, model=model)
         data = parse_json_response(text)
-        return ExtractionResult(data=data, model_used=GEMINI_MODEL,
+        return ExtractionResult(data=data, model_used=(model or GEMINI_MODEL),
                                 tokens_in=tin, tokens_out=tout)
     else:
         if not USE_CLAUDE_FALLBACK:
